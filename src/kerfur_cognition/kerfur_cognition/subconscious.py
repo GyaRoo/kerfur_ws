@@ -10,10 +10,11 @@ Backend is pluggable: 'mock' for offline dev, 'anthropic' for the real API,
 
 import json
 import random
-
+import urllib.request
+import urllib.error
 import rclpy
-from rclpy.node import Node
 
+from rclpy.node import Node
 from kerfur_msgs.msg import Situation, PADNudge
 
 
@@ -38,6 +39,42 @@ Respond ONLY with a JSON object, no other text, in exactly this form:
 
 mode_change is almost always null. Only suggest a mode ("sleepy", "playful", "alert", "sick", \
 "bonding") if the situation strongly calls for a sustained shift."""
+
+
+
+class OllamaBackend:
+    """Calls Ollama's HTTP API to produce PAD nudges from situations."""
+
+    def __init__(self, host, model, logger):
+        self.url = f"http://{host}/api/generate"
+        self.model = model
+        self.logger = logger
+
+    def react(self, situation: str) -> dict:
+        prompt = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"Situation: {situation}\n\n"
+            f"Respond with the JSON object only:"
+        )
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "format": "json",       # constrain output to valid JSON
+            "stream": False,
+            "options": {"temperature": 0.7},
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self.url, data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        # Network call - let exceptions propagate to the node's handler,
+        # which already catches and skips the nudge on failure.
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        # With format:json, body["response"] is a JSON string we parse again.
+        result = json.loads(body["response"])
+        return result
 
 
 class MockBackend:
@@ -79,16 +116,19 @@ class SubconsciousNode(Node):
         super().__init__("subconscious")
 
         self.declare_parameter("backend", "mock")  # mock | anthropic | ollama
+        self.declare_parameter("ollama_host", "192.168.40.15:11434")
+        self.declare_parameter("ollama_model", "llama3.1:latest")
+
         self.backend_name = self.get_parameter("backend").value
 
-        if self.backend_name == "mock":
-            self.backend = MockBackend()
+        if self.backend_name == "ollama":
+            host = self.get_parameter("ollama_host").value
+            model = self.get_parameter("ollama_model").value
+            self.backend = OllamaBackend(host, model, self.get_logger())
+            self.get_logger().info(f"Using Ollama backend: {model} at {host}")
         else:
-            # Real backends wired in later - fall back to mock for now
-            self.get_logger().warn(
-                f"Backend '{self.backend_name}' not yet implemented, using mock"
-            )
             self.backend = MockBackend()
+            self.get_logger().info("Using mock backend")
 
         self.sub = self.create_subscription(
             Situation, "/kerfur/situation", self.on_situation, 10

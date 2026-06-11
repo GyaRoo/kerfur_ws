@@ -57,10 +57,20 @@ class EmotionEngine(Node):
         )
 
     def on_nudge(self, msg: PADNudge):
-        """Apply a nudge to the current state."""
-        self.pleasure = clamp(self.pleasure + msg.d_pleasure)
-        self.arousal = clamp(self.arousal + msg.d_arousal)
-        self.dominance = clamp(self.dominance + msg.d_dominance)
+        """Apply a state-dependent nudge: effect diminishes near the rails."""
+
+        def saturate(current, nudge):
+            if nudge > 0.0:
+                headroom = 1.0 - current
+            else:
+                headroom = current + 1.0
+            # Optional: clamp headroom to [0,1] for purely-diminishing behavior.
+            # headroom = max(0.0, min(1.0, headroom))
+            return clamp(current + nudge * headroom)
+
+        self.pleasure = saturate(self.pleasure, msg.d_pleasure)
+        self.arousal = saturate(self.arousal, msg.d_arousal)
+        self.dominance = saturate(self.dominance, msg.d_dominance)
 
         if msg.mode_change:
             self.mode = msg.mode_change
