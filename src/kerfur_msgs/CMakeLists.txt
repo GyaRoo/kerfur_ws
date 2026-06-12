@@ -15,6 +15,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PADState.msg"
   "msg/PADNudge.msg"
   "msg/Situation.msg"
+  "msg/ConsciousnessTrigger.msg"
+  "msg/Utterance.msg"
   DEPENDENCIES builtin_interfaces
 )
 

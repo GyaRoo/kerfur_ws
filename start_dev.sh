@@ -8,7 +8,7 @@ sleep 1
 
 
 
-SRC="source /opt/ros/jazzy/setup.bash && source $WS/install/setup.bash && export ROS_DOMAIN_ID=42"
+SRC="source ~/.kerfur/secrets.env && source /opt/ros/jazzy/setup.bash && source $WS/install/setup.bash && export ROS_DOMAIN_ID=42"
 
 # --- FastAPI hub (NON-ROS) ---
 # EDIT THIS LINE to match how you actually start your hub.

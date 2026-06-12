@@ -44,6 +44,14 @@ def generate_launch_description():
             emulate_tty=True,
         ),
         Node(
+            package="kerfur_cognition",
+            executable="consciousness",
+            name="consciousness",
+            output="screen",
+            parameters=[config],
+            emulate_tty=True,
+        ),
+        Node(
             package="kerfur_bridge",
             executable="expression_bridge",
             name="expression_bridge",

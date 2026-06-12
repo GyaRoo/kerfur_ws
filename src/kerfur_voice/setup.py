@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'kerfur_cognition'
+package_name = 'kerfur_voice'
 
 setup(
     name=package_name,
@@ -14,7 +14,7 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='roo',
-    maintainer_email='roo@todo.todo',
+    maintainer_email='taharon@yahoo.com',
     description='TODO: Package description',
     license='TODO: License declaration',
     extras_require={
@@ -23,9 +23,8 @@ setup(
         ],
     },
     entry_points={
-    'console_scripts': [
-    'subconscious = kerfur_cognition.subconscious:main',
-        'consciousness = kerfur_cognition.consciousness:main',
-    ],
-},
+        'console_scripts': [
+        'voice = kerfur_voice.voice:main',
+        ],
+    },
 )
