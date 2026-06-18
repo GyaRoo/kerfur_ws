@@ -35,6 +35,16 @@ expression_bridge:
   ros__parameters:
     hub_url: "ws://localhost:8000/ws"
 
+
+perception_head:
+  ros__parameters:
+    publish_rate_hz: 20.0          # rate we publish /head/detection (behavior layer consumes ~20Hz)
+    freshness_timeout_sec: 0.4     # older than this -> publish label "" (idle); avoids stale-confident gaze
+    confidence_threshold: 0.5      # ignore detections below this confidence
+    target_labels: ["person", "face"]   # [] = accept every label the model emits
+    hailo_input: "/dev/video0"     # USB UVC path for the Arducam; "rpi" for a CSI cam
+    hef_path: ""                   # "" = let Hailo auto-pick by detected arch (hailo10h/)
+
 # --- future: drives subsystem ---
 # drives:
 #   ros__parameters:
