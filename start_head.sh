@@ -10,6 +10,10 @@
 WS=~/kerfur_ws
 ENV_NAME=ros_env
 
+# Absolute path to micromamba. A spawned `bash -c` window does NOT source
+# ~/.bashrc, so `micromamba` is not on PATH there - reference it directly.
+MAMBA=~/.local/bin/micromamba
+
 # --- FastAPI hub (NON-ROS, NON-conda) ----------------------------------------
 # The hub serves Kerferface and is a plain Python/uvicorn process. It must NOT
 # run inside the ROS conda env. EDIT these to match your real hub location/cmd.
@@ -28,8 +32,8 @@ sleep 1
 #    with "run micromamba shell init first". The hook line fixes that.
 # 2. Activate the env, THEN source the workspace overlay (order matters: the
 #    overlay was generated against the env's ROS/Python and needs it active).
-SRC="eval \"\$(micromamba shell hook --shell bash)\" && \
-micromamba activate $ENV_NAME && \
+SRC="eval \"\$($MAMBA shell hook --shell bash)\" && \
+$MAMBA activate $ENV_NAME && \
 source $WS/install/setup.bash && \
 export ROS_DOMAIN_ID=42"
 
@@ -65,12 +69,16 @@ launch "KERFUR HEAD" \
 sleep 2
 
 # --- Browser window showing the face (NON-ROS) -------------------------------
-# Plain shell. --app gives a chromeless kiosk-ish window. NOTE: the flag order
-# here is correct - the dev script had `&` misplaced before --user-data-dir,
-# which silently dropped the flag. All flags must precede the trailing `&`.
+# Plain shell. --app gives a chromeless window. The extra flags suppress
+# Chromium's cloud phone-home noise (GCM registration errors etc.) that is
+# harmless but spams the window. Flag order matters: all flags BEFORE the
+# trailing `&` (the dev script's `&` was misplaced and dropped --user-data-dir).
 launch "KERFUR FACE" \
   "echo '=== KERFUR FACE (browser) ===' && \
-   chromium --app=$HUB_URL --user-data-dir=/tmp/kerfur-face"
+   chromium --app=$HUB_URL --user-data-dir=/tmp/kerfur-face \
+     --disable-features=Translate,MediaRouter \
+     --disable-sync --no-first-run --disable-background-networking \
+     --password-store=basic 2>/dev/null"
 sleep 1
 
 # --- Free test console (sourced, ready to echo topics / fire events) ---------
