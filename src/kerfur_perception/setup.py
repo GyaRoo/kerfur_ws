@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='roo',
     maintainer_email='roo@todo.todo',
-    description='Semantic perception: Hailo detector -> most-salient Detection.',
+    description='Semantic perception: Hailo detector (separate process) bridged to Detection on the bus.',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -24,7 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'perception_head = kerfur_perception.perception_head:main',
+            'detection_bridge = kerfur_perception.detection_bridge:main',
         ],
     },
 )

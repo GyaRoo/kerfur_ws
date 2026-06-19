@@ -36,14 +36,18 @@ expression_bridge:
     hub_url: "ws://localhost:8000/ws"
 
 
-perception_head:
+# --- append to / replace in kerfur_bringup/config/kerfur_params.yaml ---
+# Replaces the earlier 'perception_head' section - the in-process Hailo node was
+# superseded by the two-process detector(socket)+bridge split.
+# Node name MUST match: super().__init__("detection_bridge"), launch name=, and
+# this section header.
+
+detection_bridge:
   ros__parameters:
-    publish_rate_hz: 20.0          # rate we publish /head/detection (behavior layer consumes ~20Hz)
-    freshness_timeout_sec: 0.4     # older than this -> publish label "" (idle); avoids stale-confident gaze
-    confidence_threshold: 0.5      # ignore detections below this confidence
-    target_labels: ["person", "face"]   # [] = accept every label the model emits
-    hailo_input: "/dev/video0"     # USB UVC path for the Arducam; "rpi" for a CSI cam
-    hef_path: ""                   # "" = let Hailo auto-pick by detected arch (hailo10h/)
+    detector_host: "127.0.0.1"     # where kerfur_detector.py's socket lives
+    detector_port: 8766            # must match SOCKET_PORT in kerfur_detector.py
+    publish_rate_hz: 20.0          # throttled publish rate onto /head/detection
+    freshness_timeout_sec: 0.4     # older than this -> publish label "" (idle)
 
 # --- future: drives subsystem ---
 # drives:

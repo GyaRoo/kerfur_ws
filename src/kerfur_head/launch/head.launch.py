@@ -28,8 +28,8 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package="kerfur_perception",
-            executable="perception_head",
-            name="perception_head",     # must match YAML section + node self-name
+            executable="detection_bridge",
+            name="detection_bridge",     # must match YAML section + node self-name
             output="screen",
             parameters=[config],
             emulate_tty=True,
