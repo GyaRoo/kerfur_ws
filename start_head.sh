@@ -7,17 +7,20 @@
 # environment in every spawned shell, because a conda env is per-shell and does
 # NOT carry into newly spawned terminals - each one must activate it itself.
 
-WS=~/kerfur_ws
+WS=$HOME/kerfur_ws
 ENV_NAME=ros_env
 
-# Absolute path to micromamba. A spawned `bash -c` window does NOT source
-# ~/.bashrc, so `micromamba` is not on PATH there - reference it directly.
-MAMBA=~/.local/bin/micromamba
+# Absolute paths, $HOME not ~ (tilde does not expand reliably inside the quoted
+# strings we pass through `bash -c`, which was causing micromamba to fall back
+# to its WRONG compiled-in default root prefix and fault with "Shell not
+# initialized"). Use $HOME everywhere and set the real root prefix explicitly.
+MAMBA=$HOME/.local/bin/micromamba
+export MAMBA_ROOT_PREFIX=$HOME/micromamba
 
 # --- FastAPI hub (NON-ROS, NON-conda) ----------------------------------------
 # The hub serves Kerferface and is a plain Python/uvicorn process. It must NOT
 # run inside the ROS conda env. EDIT these to match your real hub location/cmd.
-HUB_DIR=~/kerfur_head
+HUB_DIR=$HOME/kerfur_head
 HUB_CMD="python3 -m uvicorn hub:app --host 0.0.0.0 --port 8000"
 HUB_URL="http://localhost:8000"
 
@@ -26,16 +29,12 @@ pkill -f "ros2 run" 2>/dev/null
 pkill -f "ros2 launch" 2>/dev/null
 sleep 1
 
-# --- Environment bootstrap, run at the top of EVERY spawned shell ------------
-# 1. Initialise the micromamba shell hook. A non-interactive `bash -c` subshell
-#    does NOT source ~/.bashrc, so `micromamba activate` would otherwise fail
-#    with "run micromamba shell init first". The hook line fixes that.
-# 2. Activate the env, THEN source the workspace overlay (order matters: the
-#    overlay was generated against the env's ROS/Python and needs it active).
-SRC="eval \"\$($MAMBA shell hook --shell bash)\" && \
-$MAMBA activate $ENV_NAME && \
-source $WS/install/setup.bash && \
-export ROS_DOMAIN_ID=42"
+# --- Environment runner ------------------------------------------------------
+# We use `micromamba run` rather than `activate`. `run` executes a command
+# INSIDE the env without initialising a shell - no hook, no activate, no
+# "Shell not initialized" class of error. Each ROS launch below inlines its
+# own `micromamba run -n ros_env bash -c '...'` so nothing depends on shell
+# state or exported functions surviving the terminal-emulator boundary.
 
 # --- Detect an available terminal emulator -----------------------------------
 # Each emulator has a different "run a command in a new window" syntax, so we
@@ -62,10 +61,13 @@ launch "KERFUR HUB" \
 sleep 2   # give the hub a moment to bind its port before the bridge connects
 
 # --- Head ROS stack: perception + expression bridge + touch bridge -----------
-# All three come up from the head launch file.
+# Self-contained: micromamba run executes the launch inside the env without
+# initialising a shell. $HOME (not ~) so the path expands in every context.
 launch "KERFUR HEAD" \
-  "$SRC && echo '=== KERFUR HEAD STACK ===' && \
-   ros2 launch kerfur_head head.launch.py"
+  "echo '=== KERFUR HEAD STACK ===' && \
+   MAMBA_ROOT_PREFIX=$HOME/micromamba $MAMBA run -n $ENV_NAME \
+     bash -c 'source $WS/install/setup.bash && export ROS_DOMAIN_ID=42 && \
+              ros2 launch kerfur_head head.launch.py'"
 sleep 2
 
 # --- Browser window showing the face (NON-ROS) -------------------------------
@@ -81,14 +83,16 @@ launch "KERFUR FACE" \
      --password-store=basic 2>/dev/null"
 sleep 1
 
-# --- Free test console (sourced, ready to echo topics / fire events) ---------
+# --- Free test console (in-env shell, ready to echo topics / fire events) ----
+# Drops into an interactive bash INSIDE the env via micromamba run, with the
+# overlay already sourced, so you can type ros2 commands directly.
 launch "HEAD TEST" \
-  "$SRC && echo '=== HEAD TEST CONSOLE ===' && \
-   echo 'Watch detections:' && \
-   echo '  ros2 topic echo /head/detection' && \
-   echo '' && echo 'Watch nudges (touch reflex):' && \
-   echo '  ros2 topic echo /kerfur/pad_nudge' && \
-   echo ''"
+  "echo '=== HEAD TEST CONSOLE ===' && \
+   echo 'Watch detections:   ros2 topic echo /head/detection' && \
+   echo 'Watch nudges:        ros2 topic echo /kerfur/pad_nudge' && \
+   echo '' && \
+   MAMBA_ROOT_PREFIX=$HOME/micromamba $MAMBA run -n $ENV_NAME \
+     bash --rcfile <(echo 'source $WS/install/setup.bash; export ROS_DOMAIN_ID=42')"
 
 echo "Kerfur head environment starting in separate terminal windows."
 echo "If perception logs 'Hailo stack not importable', the Hailo bindings are"
