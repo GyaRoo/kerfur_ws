@@ -14,7 +14,6 @@ set -e
 # kerfur_msgs MUST build first and on every machine - it is the shared contract.
 PACKAGES=(
   kerfur_msgs
-  kerfur_behavior
   kerfur_cognition
   kerfur_bringup
 )

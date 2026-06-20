@@ -19,22 +19,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        Node(
-            package="kerfur_behavior",
-            executable="emotion_engine",
-            name="emotion_engine",
-            output="screen",
-            parameters=[config],
-            emulate_tty=True,
-        ),
-        Node(
-            package="kerfur_behavior",
-            executable="pad_to_face",
-            name="pad_to_expression",     # must match the YAML section + node's self-name
-            output="screen",
-            parameters=[config],
-            emulate_tty=True,
-        ),
+
         Node(
             package="kerfur_cognition",
             executable="subconscious",
