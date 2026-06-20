@@ -49,6 +49,23 @@ detection_bridge:
     publish_rate_hz: 20.0          # throttled publish rate onto /head/detection
     freshness_timeout_sec: 0.4     # older than this -> publish label "" (idle)
 
+# --- append to kerfur_bringup/config/kerfur_params.yaml ---
+# Node name MUST match: super().__init__("attention_selector"), launch name=,
+# and this section header.
+
+attention_selector:
+  ros__parameters:
+    publish_rate_hz: 20.0          # gaze publish rate onto /kerfur/gaze
+    mirror_x: true                 # flip image-x so eyes appear to follow the person
+                                   #   (forward-facing camera). set false if she tracks backward.
+    anticipate_hold_sec: 1.5       # hold last gaze after target leaves, before wandering
+    # --- search-mode lazy wander ---
+    wander_range: 0.5              # max gaze excursion while wandering (0..1)
+    wander_move_sec: 2.5           # seconds to ease between wander points (bigger = lazier)
+    wander_pause_sec: 1.5          # seconds to dwell at each wander point
+
+
+
 # --- future: drives subsystem ---
 # drives:
 #   ros__parameters:

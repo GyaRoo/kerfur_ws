@@ -50,4 +50,13 @@ def generate_launch_description():
             parameters=[config],
             emulate_tty=True,
         ),
+        Node(
+            package="kerfur_behavior",
+            executable="attention_selector",
+            name="attention_selector",
+            output="screen",
+            parameters=[config],
+            emulate_tty=True,
+        ),
+
     ])

@@ -18,6 +18,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ConsciousnessTrigger.msg"
   "msg/Utterance.msg"
   "msg/Detection.msg"
+  "msg/GazeTarget.msg"
   DEPENDENCIES builtin_interfaces
 )
 
