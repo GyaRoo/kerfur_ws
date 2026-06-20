@@ -79,11 +79,10 @@ class AttentionSelector(Node):
         self.last_gaze = (0.0, 0.0)         # last emitted gaze, for holding/easing
         self.anticipate_until = None        # clock time when anticipation expires
 
-        # Wander sub-state: ease from a start point to a target point, pause, repeat
-        self.wander_from = (0.0, 0.0)
+        # Wander sub-state: hold a target point for a while, then jump to a new
+        # one. The browser smooths the jump; we never interpolate here.
         self.wander_to = self._random_wander_point()
         self.wander_phase_start = self.get_clock().now()
-        self.wander_moving = True           # True = easing to wander_to, False = pausing
 
         # --- I/O ---
         self.create_subscription(Detection, "/head/detection", self.on_detection, 10)
@@ -145,13 +144,11 @@ class AttentionSelector(Node):
         elif self.state == STATE_ANTICIPATE:
             # Hold last gaze until the anticipation window expires.
             if self._secs_since(self.anticipate_until) >= self.anticipate_hold:
-                # Give up waiting -> start wandering from where we held.
+                # Give up waiting -> start wandering. Pick a first point and hold.
                 self.state = STATE_SEARCH
-                self.wander_from = self.last_gaze
                 self.wander_to = self._random_wander_point()
                 self.wander_phase_start = self._now()
-                self.wander_moving = True
-                gaze = self.last_gaze
+                gaze = self.wander_to
             else:
                 gaze = self.last_gaze
 
@@ -162,31 +159,19 @@ class AttentionSelector(Node):
         self._publish(gaze)
 
     def _wander_step(self):
-        """Lazy ambient drift: ease to a point, pause, pick a new point, repeat."""
+        """Lazy ambient drift via DISCRETE targets: pick a point, hold it, pick
+        a new one. We do NOT interpolate here - we emit a steady destination and
+        let the browser's pupil smoothing animate the motion between points.
+        (Interpolating here too made the selector and browser fight.)"""
         elapsed = self._secs_since(self.wander_phase_start)
-
-        if self.wander_moving:
-            # Easing from wander_from to wander_to over wander_move seconds.
-            t = min(1.0, elapsed / self.wander_move) if self.wander_move > 0 else 1.0
-            # Smoothstep for a gentle ease in/out (browser also smooths, but this
-            # keeps the *target* itself from moving linearly/mechanically).
-            s = t * t * (3.0 - 2.0 * t)
-            gx = self.wander_from[0] + (self.wander_to[0] - self.wander_from[0]) * s
-            gy = self.wander_from[1] + (self.wander_to[1] - self.wander_from[1]) * s
-            if t >= 1.0:
-                # Arrived -> begin pause.
-                self.wander_moving = False
-                self.wander_phase_start = self._now()
-            return (gx, gy)
-        else:
-            # Pausing at wander_to.
-            if elapsed >= self.wander_pause:
-                # Pause over -> pick a new destination and move again.
-                self.wander_from = self.wander_to
-                self.wander_to = self._random_wander_point()
-                self.wander_moving = True
-                self.wander_phase_start = self._now()
-            return self.wander_to
+        # Total time to spend on each point = travel allowance + dwell. We don't
+        # actually move during travel; the browser does. We just hold the target
+        # long enough for the browser to ease there and rest before the next hop.
+        hold = self.wander_move + self.wander_pause
+        if elapsed >= hold:
+            self.wander_to = self._random_wander_point()
+            self.wander_phase_start = self._now()
+        return self.wander_to
 
     def _publish(self, gaze):
         msg = GazeTarget()
