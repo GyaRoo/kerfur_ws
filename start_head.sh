@@ -80,7 +80,8 @@ launch "KERFUR FACE" \
    chromium --app=$HUB_URL --user-data-dir=/tmp/kerfur-face \
      --disable-features=Translate,MediaRouter \
      --disable-sync --no-first-run --disable-background-networking \
-     --password-store=basic 2>/dev/null"
+     --password-store=basic 2>/dev/null\
+     --start-fullscreen"
 sleep 1
 
 # --- Free test console (in-env shell, ready to echo topics / fire events) ----

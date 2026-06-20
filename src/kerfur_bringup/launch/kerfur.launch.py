@@ -51,12 +51,4 @@ def generate_launch_description():
             parameters=[config],
             emulate_tty=True,
         ),
-        Node(
-            package="kerfur_bridge",
-            executable="expression_bridge",
-            name="expression_bridge",
-            output="screen",
-            parameters=[config],
-            emulate_tty=True,
-        ),
     ])
