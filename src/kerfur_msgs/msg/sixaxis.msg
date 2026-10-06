@@ -1,5 +1,7 @@
 # sixaxis.msg - Stewart platform pose relative to defined neutral pose
 
+string actuator_id
+
 float32 pitch_deg
 float32 roll_deg
 float32 yaw_deg
