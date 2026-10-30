@@ -74,3 +74,18 @@ attention_selector:
 #     pat_overload_threshold: 1.5
 #     energy_drain_rate: 0.01
 #     energy_to_arousal_coupling: 0.3
+
+touch_bridge:
+  ros__parameters:
+    nudge_center:  [0.20, -0.10, -0.05]
+    nudge_cheek_l: [0.25, -0.15,  0.00]
+    nudge_cheek_r: [0.25, -0.15,  0.00]
+    nudge_ear_l:   [0.20,  0.30,  0.05]
+    nudge_ear_r:   [0.20,  0.30,  0.05]
+    repeat_sec: 0.7
+    spike_expression: "happy"
+    enable_mode_change: false
+
+
+
+
