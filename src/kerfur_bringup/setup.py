@@ -18,6 +18,8 @@ setup(
         # Install config files
         (os.path.join('share', package_name, 'config'),
             glob(os.path.join('config', '*.yaml'))),
+        (os.path.join('share', package_name, 'config'),
+            glob(os.path.join('config', '*.md'))),
     ],
 
     install_requires=['setuptools'],

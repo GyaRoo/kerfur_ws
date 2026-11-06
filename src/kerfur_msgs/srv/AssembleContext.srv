@@ -1,0 +1,9 @@
+string pass_type
+string trigger_text
+string agent_result
+---
+string cacheable_prefix
+string volatile_suffix
+string[] slot_hashes
+uint32[] slot_tokens
+bool degraded

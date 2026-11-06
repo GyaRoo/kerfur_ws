@@ -86,6 +86,17 @@ touch_bridge:
     spike_expression: "happy"
     enable_mode_change: false
 
+context_server:
+  ros__parameters:
+    pad_stale_sec: 2.0
+    log_full_prompt: true
+
+consciousness:
+  ros__parameters:
+    llm_url: "http://100.87.140.51:8400/v1/chat/completions"
+    llm_model: "kerfur-consciousness"
+    llm_timeout_sec: 30.0
+    context_timeout_sec: 2.0
 
 
 

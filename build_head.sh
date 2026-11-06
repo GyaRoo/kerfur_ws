@@ -19,6 +19,8 @@ PACKAGES=(
   kerfur_bridge
   kerfur_bringup
   kerfur_behavior
+  kerfur_memory
+  kerfur_cognition
 )
 
 echo "=== Building HEAD packages: ${PACKAGES[*]} ==="

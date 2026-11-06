@@ -40,6 +40,7 @@ EOF
 ENV_NAME=ros_env
 MAMBA=$HOME/.local/bin/micromamba
 export MAMBA_ROOT_PREFIX=$HOME/micromamba
+set -a; source ~/.kerfur/secrets.env; set +a
 
 # DDS config - static unicast peers because the WiFi AP drops multicast.
 # The XML must contain the dev machine's IP (this Fast DDS build rejects
@@ -112,6 +113,7 @@ launch "KERFUR DETECTOR" \
    source $HAILO_ENV_SETUP && \
    python3 $DETECTOR_SCRIPT --input $DETECTOR_INPUT"
 sleep 3   # the Hailo pipeline takes a moment to spin up its GStreamer graph
+
 
 # --- Head ROS stack ----------------------------------------------------------
 # Self-reporting: prints the environment it actually has BEFORE launching.

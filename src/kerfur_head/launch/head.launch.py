@@ -74,5 +74,21 @@ def generate_launch_description():
             parameters=[config],
             emulate_tty=True,
         ),
+        Node(
+			package="kerfur_memory",
+			executable="context_server",
+			name="context_server",
+			output="screen",
+			parameters=[config],
+			emulate_tty=True,
+		),
+		        Node(
+			package="kerfur_cognition",
+			executable="consciousness",
+			name="consciousness",
+			output="screen",
+			parameters=[config],
+			emulate_tty=True,
+		),
 
     ])
