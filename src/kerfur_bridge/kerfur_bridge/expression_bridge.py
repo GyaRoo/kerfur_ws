@@ -110,6 +110,19 @@ class ExpressionBridge(Node):
         # a dropped frame is invisible, and warning on every one would spam.
         self._send(payload)
 
+    def on_speech(self, msg: Speech):
+        payload = {
+            "type": "say",
+            "text": msg.text,
+            "syllables": list(msg.syllables),
+            "pitch_hz": [float(x) for x in msg.pitch_hz],
+            "duration_sec": [float(x) for x in msg.duration_sec],
+            "gap_sec": [float(x) for x in msg.gap_sec],
+            "gain": float(msg.gain),
+            "timbre": msg.timbre,
+        }
+        self._send(payload)
+
 
 def main():
     rclpy.init()
