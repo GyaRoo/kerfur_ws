@@ -21,6 +21,7 @@ PACKAGES=(
   kerfur_behavior
   kerfur_memory
   kerfur_cognition
+  kerfur_voice
 )
 
 echo "=== Building HEAD packages: ${PACKAGES[*]} ==="

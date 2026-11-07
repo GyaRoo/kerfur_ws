@@ -82,10 +82,19 @@ def generate_launch_description():
 			parameters=[config],
 			emulate_tty=True,
 		),
-		        Node(
+		Node(
 			package="kerfur_cognition",
 			executable="consciousness",
 			name="consciousness",
+			output="screen",
+			parameters=[config],
+			emulate_tty=True,
+		),
+		
+		Node(
+			package="kerfur_voice",
+			executable="voice",
+			name="voice",
 			output="screen",
 			parameters=[config],
 			emulate_tty=True,

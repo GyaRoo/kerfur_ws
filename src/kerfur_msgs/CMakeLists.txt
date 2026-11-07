@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Utterance.msg"
   "msg/Detection.msg"
   "msg/GazeTarget.msg"
+  "msg/Speech.msg"
   "srv/AssembleContext.srv"
   DEPENDENCIES builtin_interfaces
 )
