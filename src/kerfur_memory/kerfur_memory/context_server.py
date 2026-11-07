@@ -1,22 +1,25 @@
 """Context server: assembles the prompt Kerfur's cognition nodes send to the LLM.
 
-Single owner of prompt text. Cognition nodes hold no prompt strings of their
-own - they call /kerfur/assemble_context and forward what comes back.
+Single owner of prompt text and of the memory store. Cognition nodes hold
+no prompt strings of their own - they call /kerfur/assemble_context and
+forward what comes back.
 
-Stage 1 serves three slots:
+Stage 2 serves four slots:
   identity  - who she is (static file, cacheable)
   voice     - output contract (static file, cacheable)
+  core      - tier-1 memory rows (SQLite, cacheable, reloaded on a timer)
   snapshot  - live PAD state (volatile)
 
-The response is split at the cache boundary: cacheable_prefix never contains
-anything that changes between calls; volatile_suffix carries everything that
-does. Interleaving them would silently defeat prompt caching upstream.
+The response is split at the cache boundary: cacheable_prefix changes only
+when a file or a core row changes; volatile_suffix changes every call.
 
-Fails soft: a missing file or stale PAD sets `degraded` rather than crashing.
+Fails soft: a missing file, an unopenable store, or stale PAD sets
+`degraded` rather than crashing.
 """
 
 import hashlib
 import os
+import sqlite3
 from dataclasses import dataclass
 
 import yaml
@@ -28,18 +31,33 @@ from kerfur_msgs.msg import PADState
 from kerfur_msgs.srv import AssembleContext
 
 
-# Where the static prompt files live. They are installed alongside
-# kerfur_params.yaml by the bringup package's setup.py glob.
 CONFIG_PACKAGE = "kerfur_bringup"
 CONFIG_SUBDIR = "config"
-
-# Hash length. 12 hex chars is plenty to disambiguate and keeps log lines short.
 HASH_LEN = 12
+
+# Memory tiers. 0 is reserved for identity should it ever move into the
+# store; today identity is a file. 1 is always-in-prompt. 2 is archival,
+# retrieved on demand (stage 4).
+TIER_CORE = 1
+TIER_ARCHIVAL = 2
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory (
+  id          INTEGER PRIMARY KEY,
+  ts          INTEGER NOT NULL,
+  kind        TEXT    NOT NULL,
+  subject     TEXT,
+  text        TEXT    NOT NULL,
+  salience    REAL    NOT NULL,
+  tier        INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_tier_sal ON memory(tier, salience DESC);
+"""
 
 
 @dataclass
 class Slot:
-    """One prompt slot: a body of text plus the metadata the server tracks."""
     name: str
     body: str
     hash: str
@@ -48,40 +66,20 @@ class Slot:
 
 
 def short_hash(text: str) -> str:
-    """Stable fingerprint of a text body. Logged with every prompt so a change
-    in her behavior can be tied to a change in what she was told."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:HASH_LEN]
 
 
 def count_tokens(text: str) -> int:
-    """Rough token count. Word count is a crude proxy but it's consistent,
-    which is what matters for a cap. Swap for a real tokenizer later if the
-    cap ever needs to be precise."""
     return len(text.split())
 
 
 def split_frontmatter(raw: str):
-    """Split a markdown file into (meta_dict, body).
-
-    Expected layout:
-        ---
-        version: 1
-        max_tokens: 250
-        ---
-        body text...
-
-    If there's no frontmatter, meta is empty and the whole file is the body.
-    """
     stripped = raw.lstrip()
     if not stripped.startswith("---"):
         return {}, raw
-
-    # Split on the first two '---' markers. parts[0] is empty (before the
-    # first marker), parts[1] is the YAML, parts[2] is the body.
     parts = stripped.split("---", 2)
     if len(parts) < 3:
         return {}, raw
-
     meta = yaml.safe_load(parts[1]) or {}
     body = parts[2].strip()
     return meta, body
@@ -92,50 +90,58 @@ class ContextServer(Node):
         super().__init__("context_server")
 
         # --- Parameters ---
-        # PAD older than this is considered stale and the snapshot reports
-        # "state unavailable" rather than old numbers.
         self.declare_parameter("pad_stale_sec", 2.0)
-        # Log the full assembled prompt at INFO. Turn off once it's noisy.
         self.declare_parameter("log_full_prompt", True)
+        # Store location. Outside the workspace so a rebuild never touches it.
+        self.declare_parameter("memory_db_path", os.path.expanduser("~/.kerfur/memory.db"))
+        # Hard cap on the core slot. Lowest-salience rows fall off first.
+        self.declare_parameter("core_max_tokens", 500)
+        # How often core is re-read from disk. Core changes rarely; per-call
+        # reads would be wasted I/O on the Pi.
+        self.declare_parameter("core_reload_sec", 30.0)
 
         self.pad_stale_sec = self.get_parameter("pad_stale_sec").value
         self.log_full_prompt = self.get_parameter("log_full_prompt").value
+        self.db_path = self.get_parameter("memory_db_path").value
+        self.core_max_tokens = self.get_parameter("core_max_tokens").value
+        self.core_reload_sec = self.get_parameter("core_reload_sec").value
 
-        # --- Static slots, loaded once ---
+        # --- Static slots ---
         config_dir = os.path.join(
             get_package_share_directory(CONFIG_PACKAGE), CONFIG_SUBDIR
         )
         self.identity = self._load_slot("identity", config_dir, default_max=250)
         self.voice = self._load_slot("voice", config_dir, default_max=150)
 
-        # Log hashes once at startup. This is the line you grep for when
-        # correlating a behavior shift to a file edit.
+        # --- Store ---
+        self.db = self._open_store()
+        self.core = self._load_core()
+
         self.get_logger().info(
-            f"Slots loaded: identity={self.identity.hash} "
-            f"(ok={self.identity.ok}) voice={self.voice.hash} "
-            f"(ok={self.voice.ok})"
+            f"Slots loaded: identity={self.identity.hash} (ok={self.identity.ok}) "
+            f"voice={self.voice.hash} (ok={self.voice.ok}) "
+            f"core={self.core.hash} (ok={self.core.ok}, {count_tokens(self.core.body)} tok)"
         )
 
         # --- Live state ---
         self.last_pad = None
         self.last_pad_time = None
-
         self.create_subscription(PADState, "/kerfur/pad_state", self.on_pad, 10)
+
+        # --- Timers ---
+        self.create_timer(self.core_reload_sec, self._reload_core)
 
         # --- Service ---
         self.create_service(
             AssembleContext, "/kerfur/assemble_context", self.on_assemble
         )
-
         self.get_logger().info("ContextServer ready on /kerfur/assemble_context")
 
     # ------------------------------------------------------------------
-    # Loading
+    # Static slots
     # ------------------------------------------------------------------
 
     def _load_slot(self, name: str, config_dir: str, default_max: int) -> Slot:
-        """Read <name>.md from the config dir into a Slot. Never raises -
-        a missing or malformed file yields an empty slot with ok=False."""
         path = os.path.join(config_dir, f"{name}.md")
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -144,26 +150,87 @@ class ContextServer(Node):
             self.get_logger().error(f"Slot '{name}' unavailable: {e}")
             return Slot(name=name, body="", hash="missing",
                         max_tokens=default_max, ok=False)
-
         meta, body = split_frontmatter(raw)
         max_tokens = int(meta.get("max_tokens", default_max))
-
-        # Hash the body only. Bumping `version` in frontmatter shouldn't
-        # change the hash - the hash tracks what the model actually sees.
         return Slot(name=name, body=body, hash=short_hash(body),
                     max_tokens=max_tokens, ok=True)
 
     # ------------------------------------------------------------------
-    # Subscriptions
+    # Store
+    # ------------------------------------------------------------------
+
+    def _open_store(self):
+        """Open (or create) the SQLite store. Returns None on failure -
+        the node runs without core memory rather than dying."""
+        try:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            # check_same_thread=False: the timer and the service callback
+            # may run on different executor threads later. Access is
+            # read-only from this node for now, so no locking needed yet.
+            db = sqlite3.connect(self.db_path, check_same_thread=False)
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript(SCHEMA)
+            db.commit()
+            self.get_logger().info(f"Memory store open: {self.db_path}")
+            return db
+        except sqlite3.Error as e:
+            self.get_logger().error(f"Memory store unavailable: {e}")
+            return None
+
+    def _load_core(self) -> Slot:
+        """Read tier-1 rows into the core slot, highest salience first,
+        truncated at core_max_tokens by whole rows. A row that doesn't fit
+        is dropped, never cut mid-sentence."""
+        if self.db is None:
+            return Slot(name="core", body="", hash="nostore",
+                        max_tokens=self.core_max_tokens, ok=False)
+        try:
+            rows = self.db.execute(
+                "SELECT text FROM memory WHERE tier = ? "
+                "ORDER BY salience DESC, last_seen DESC",
+                (TIER_CORE,),
+            ).fetchall()
+        except sqlite3.Error as e:
+            self.get_logger().error(f"Core read failed: {e}")
+            return Slot(name="core", body="", hash="readfail",
+                        max_tokens=self.core_max_tokens, ok=False)
+
+        header = "What Kerfur remembers:"
+        lines, used, dropped = [header], count_tokens(header), 0
+        for (text,) in rows:
+            t = count_tokens(text)
+            if used + t > self.core_max_tokens:
+                dropped += 1
+                continue
+            lines.append(f"- {text}")
+            used += t
+        if dropped:
+            self.get_logger().warn(
+                f"Core truncated: {dropped} row(s) over {self.core_max_tokens} tokens"
+            )
+
+        # No rows at all: an empty core is valid, not degraded. She just
+        # doesn't remember anything yet.
+        body = "\n".join(lines) if len(lines) > 1 else ""
+        return Slot(name="core", body=body, hash=short_hash(body),
+                    max_tokens=self.core_max_tokens, ok=(dropped == 0))
+
+    def _reload_core(self):
+        new = self._load_core()
+        if new.hash != self.core.hash:
+            self.get_logger().info(
+                f"Core changed: {self.core.hash} -> {new.hash} "
+                f"({count_tokens(new.body)} tok)"
+            )
+        self.core = new
+
+    # ------------------------------------------------------------------
+    # Live state
     # ------------------------------------------------------------------
 
     def on_pad(self, msg: PADState):
         self.last_pad = msg
         self.last_pad_time = self.get_clock().now()
-
-    # ------------------------------------------------------------------
-    # Assembly
-    # ------------------------------------------------------------------
 
     def _pad_is_stale(self) -> bool:
         if self.last_pad_time is None:
@@ -171,13 +238,9 @@ class ContextServer(Node):
         age = (self.get_clock().now() - self.last_pad_time).nanoseconds / 1e9
         return age > self.pad_stale_sec
 
-    def _build_snapshot(self) -> str:
-        """Live state block. Uses PADState field names verbatim so log greps
-        and the model see the same vocabulary."""
-        if self._pad_is_stale():
-            # Tell the model it's blind rather than inventing zeros.
+    def _build_snapshot(self, stale: bool) -> str:
+        if stale:
             return "Current state:\nstate unavailable"
-
         p = self.last_pad
         return (
             "Current state:\n"
@@ -185,10 +248,11 @@ class ContextServer(Node):
             f"dominance={p.dominance:+.2f} mode={p.mode}"
         )
 
+    # ------------------------------------------------------------------
+    # Assembly
+    # ------------------------------------------------------------------
+
     def _cap(self, text: str, max_tokens: int, slot_name: str):
-        """Truncate to max_tokens words. Returns (text, was_truncated).
-        Truncation is always logged - a silently shortened identity is
-        worse than a loud one."""
         words = text.split()
         if len(words) <= max_tokens:
             return text, False
@@ -198,42 +262,36 @@ class ContextServer(Node):
         return " ".join(words[:max_tokens]), True
 
     def on_assemble(self, request, response):
-        truncated = False
+        identity_body, t1 = self._cap(self.identity.body, self.identity.max_tokens, "identity")
+        voice_body, t2 = self._cap(self.voice.body, self.voice.max_tokens, "voice")
+        truncated = t1 or t2 or not self.core.ok
 
-        # --- Cacheable prefix: static slots only ---
-        identity_body, t1 = self._cap(
-            self.identity.body, self.identity.max_tokens, "identity"
-        )
-        voice_body, t2 = self._cap(
-            self.voice.body, self.voice.max_tokens, "voice"
-        )
-        truncated = truncated or t1 or t2
+        # --- Cacheable prefix: identity, voice, core. Static per reload. ---
+        prefix_parts = [identity_body, voice_body]
+        if self.core.body:
+            prefix_parts.append(self.core.body)
+        response.cacheable_prefix = "\n\n".join(prefix_parts)
 
-        # Nothing dynamic may ever be added to this string. It is the cache
-        # key for everything upstream.
-        response.cacheable_prefix = identity_body + "\n\n" + voice_body
-
-        # --- Volatile suffix: snapshot + trigger ---
-        snapshot = self._build_snapshot()
+        # --- Volatile suffix ---
         pad_stale = self._pad_is_stale()
-
-        # Stage 1: agent and render passes get the same suffix. The split
-        # becomes real when tools and the memory store arrive.
+        snapshot = self._build_snapshot(pad_stale)
         suffix_parts = [snapshot]
         if request.agent_result:
             suffix_parts.append("Facts:\n" + request.agent_result)
         suffix_parts.append(request.trigger_text)
         response.volatile_suffix = "\n\n".join(suffix_parts)
 
-        # --- Bookkeeping ---
+        # --- Bookkeeping: four slots now ---
         response.slot_hashes = [
             self.identity.hash,
             self.voice.hash,
+            self.core.hash,
             short_hash(snapshot),
         ]
         response.slot_tokens = [
             count_tokens(identity_body),
             count_tokens(voice_body),
+            count_tokens(self.core.body),
             count_tokens(snapshot),
         ]
         response.degraded = (
@@ -243,11 +301,10 @@ class ContextServer(Node):
             or truncated
         )
 
-        # --- The deliverable: a verbatim record of what she was told ---
         self.get_logger().info(
             f"Assembled [{request.pass_type}] hashes="
             f"{'/'.join(response.slot_hashes)} "
-            f"tokens={response.slot_tokens} degraded={response.degraded}"
+            f"tokens={list(response.slot_tokens)} degraded={response.degraded}"
         )
         if self.log_full_prompt:
             self.get_logger().info(
@@ -255,7 +312,6 @@ class ContextServer(Node):
                 "\n--- SUFFIX ---\n" + response.volatile_suffix +
                 "\n--- END ---"
             )
-
         return response
 
 
@@ -267,6 +323,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if node.db is not None:
+            node.db.close()
         node.destroy_node()
         rclpy.shutdown()
 
