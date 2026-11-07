@@ -1,149 +1,159 @@
-"""Voice subsystem: speaks utterances in a synthesizer-flavored, mood-colored voice.
+"""Voice subsystem: turns utterances into blabber scores.
 
-Subscribes to /kerfur/utterance, synthesizes via Piper, applies mood-coloring
-(speed/pitch from PAD), plays to a configured audio sink. Identical on M80q and
-head - the audio sink parameter is the only deployment difference. The DSP
-'synthesizer character' chain is a tuning hook to fill in over time.
+Subscribes to /kerfur/utterance, builds a per-syllable score (pitch,
+duration, gap) colored by the PAD snapshot the utterance carries, and
+publishes it as a Speech message. Nothing is synthesized here - the face
+browser plays the score through Web Audio and reveals the text in step.
+
+Python decides what she sounds like; the browser only plays it. Same
+split as expressions. Every coefficient is a parameter so the voice is
+tuned from kerfur_params.yaml, not from code.
 """
-
-import os
-import subprocess
-import tempfile
-import threading
-import queue
-import wave
 
 import rclpy
 from rclpy.node import Node
 
-from kerfur_msgs.msg import Utterance
+from kerfur_msgs.msg import Utterance, Speech
+
+
+VOWELS = set("aeiouy")
+
+
+def clamp(value, lo, hi):
+    return max(lo, min(hi, value))
+
+
+def syllabify(text: str):
+    """Split text into syllable-ish chunks, one blip each.
+
+    Vowel-group counting: a new chunk starts at each vowel run after the
+    current chunk already holds one. Wrong on a fair share of English
+    words and it doesn't matter - this is the rhythm of speech, not
+    speech. Each chunk keeps its trailing space (except the last) so the
+    overlay can concatenate them straight back into the original line.
+    """
+    out = []
+    for word in text.split(" "):
+        if not word:
+            continue
+        chunks, cur, in_vowel = [], "", False
+        for ch in word:
+            is_v = ch.lower() in VOWELS
+            if is_v and not in_vowel and any(c.lower() in VOWELS for c in cur):
+                chunks.append(cur)
+                cur = ""
+            cur += ch
+            in_vowel = is_v
+        if cur:
+            chunks.append(cur)
+        chunks[-1] += " "
+        out.extend(chunks)
+    if out:
+        out[-1] = out[-1].rstrip()
+    return out
 
 
 class VoiceNode(Node):
     def __init__(self):
         super().__init__("voice")
 
-        # --- Parameters (go in the global config; differ per deployment) ---
-        # Piper binary + voice model
-        self.declare_parameter("piper_bin", "piper")
-        self.declare_parameter("piper_model", "/home/roo/piper/voice.onnx")
-        # Audio playback command. {wav} is substituted with the file path.
-        # M80q: default sink. Head: point at the USB DAC / BT sink via aplay -D.
-        self.declare_parameter("play_cmd", "aplay {wav}")
-        # Mood-coloring ranges (tunable)
-        self.declare_parameter("length_scale_base", 1.0)   # Piper pacing; >1 slower
-        self.declare_parameter("length_scale_arousal", -0.3)  # arousal speeds speech
-        self.declare_parameter("pitch_semitones_arousal", 2.0)  # arousal raises pitch
+        # --- Base voice ---
+        self.declare_parameter("base_hz", 440.0)        # pitch center at arousal=0
+        self.declare_parameter("base_dur_sec", 0.09)    # blip length at arousal=0
+        self.declare_parameter("base_gap_sec", 0.04)    # silence between blips
+        self.declare_parameter("base_gain", 0.6)        # loudness at dominance=0
 
-        self.piper_bin = self.get_parameter("piper_bin").value
-        self.piper_model = self.get_parameter("piper_model").value
-        self.play_cmd = self.get_parameter("play_cmd").value
-        self.ls_base = self.get_parameter("length_scale_base").value
-        self.ls_arousal = self.get_parameter("length_scale_arousal").value
-        self.pitch_arousal = self.get_parameter("pitch_semitones_arousal").value
+        # --- PAD coupling ---
+        self.declare_parameter("arousal_octaves", 0.5)    # arousal=+1 raises pitch this many octaves
+        self.declare_parameter("arousal_speed", 0.4)      # arousal=+1 shortens blips by this fraction
+        self.declare_parameter("pleasure_drift", 0.08)    # pleasure=+1 drifts pitch up this fraction over the line
+        self.declare_parameter("dominance_gain", 0.25)    # dominance=+1 adds this to gain
+        self.declare_parameter("dominance_tighten", 0.5)  # dominance=+1 shrinks gaps by this fraction
 
-        # Speech runs in a worker thread so synthesis/playback never blocks ROS spin.
-        # A queue serializes utterances - Kerfur says one thing at a time.
-        self.speech_queue = queue.Queue()
-        self.worker = threading.Thread(target=self._speech_worker, daemon=True)
-        self.worker.start()
+        # --- Melody ---
+        # Semitone offsets a syllable's leading letter can land on. A
+        # pentatonic-ish set so no word ever sounds sour. Same letter always
+        # picks the same step - that's what keeps her voice recognizable.
+        self.declare_parameter("pitch_steps", [0, 2, 4, 7, 9, 12])
+        # Blips ending a sentence are held slightly longer.
+        self.declare_parameter("terminal_stretch", 1.3)
 
+        self.base_hz = self.get_parameter("base_hz").value
+        self.base_dur = self.get_parameter("base_dur_sec").value
+        self.base_gap = self.get_parameter("base_gap_sec").value
+        self.base_gain = self.get_parameter("base_gain").value
+        self.arousal_octaves = self.get_parameter("arousal_octaves").value
+        self.arousal_speed = self.get_parameter("arousal_speed").value
+        self.pleasure_drift = self.get_parameter("pleasure_drift").value
+        self.dominance_gain = self.get_parameter("dominance_gain").value
+        self.dominance_tighten = self.get_parameter("dominance_tighten").value
+        self.pitch_steps = list(self.get_parameter("pitch_steps").value)
+        self.terminal_stretch = self.get_parameter("terminal_stretch").value
+
+        self.speech_pub = self.create_publisher(Speech, "/kerfur/speech", 10)
         self.create_subscription(Utterance, "/kerfur/utterance", self.on_utterance, 10)
 
         self.get_logger().info(
-            f"Voice online: piper={self.piper_bin}, model={self.piper_model}, "
-            f"play='{self.play_cmd}'"
+            f"Voice online: base={self.base_hz:.0f}Hz dur={self.base_dur:.3f}s "
+            f"steps={self.pitch_steps}"
         )
 
     def on_utterance(self, msg: Utterance):
-        if not msg.text.strip():
+        text = msg.text.strip()
+        if not text:
             return
-        # Hand off to the worker; don't synthesize on the ROS callback thread.
-        self.speech_queue.put(msg)
-        self.get_logger().info(f'Queued utterance: "{msg.text}"')
 
-    def _speech_worker(self):
-        while True:
-            msg = self.speech_queue.get()
-            try:
-                self._speak(msg)
-            except Exception as e:
-                self.get_logger().warn(f"Voice synthesis/playback failed: {e}")
-            finally:
-                self.speech_queue.task_done()
+        score = self.build_score(text, msg.pleasure, msg.arousal, msg.dominance)
+        syls, pitch, durs, gaps, gain = score
 
-    def _speak(self, msg: Utterance):
-        # --- Mood -> Piper pacing ---
-        # arousal in [-1,1]; higher arousal -> faster speech (lower length_scale)
-        length_scale = self.ls_base + self.ls_arousal * msg.arousal
-        length_scale = max(0.5, min(2.0, length_scale))  # clamp to sane range
+        out = Speech()
+        out.text = text
+        out.syllables = syls
+        out.pitch_hz = pitch
+        out.duration_sec = durs
+        out.gap_sec = gaps
+        out.gain = gain
+        out.timbre = self.pick_timbre(msg)
+        self.speech_pub.publish(out)
 
-        # --- Synthesize with Piper to a temp WAV ---
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
-            wav_path = tf.name
-        try:
-            # Piper reads text on stdin, writes WAV to --output_file
-            piper_cmd = [
-                self.piper_bin,
-                "--model", self.piper_model,
-                "--length_scale", str(length_scale),
-                "--output_file", wav_path,
-            ]
-            subprocess.run(
-                piper_cmd,
-                input=msg.text.encode("utf-8"),
-                check=True,
-                capture_output=True,
-            )
+        self.get_logger().info(
+            f'Scored: "{text}" [{len(syls)} syl, {min(pitch):.0f}-{max(pitch):.0f}Hz, '
+            f"gain={gain:.2f}, PAD=({msg.pleasure:+.2f},{msg.arousal:+.2f},{msg.dominance:+.2f})]"
+        )
 
-            # --- Mood -> pitch + (future) DSP character chain ---
-            # arousal raises pitch; this is the hook where the synthesizer
-            # character (formant/ring-mod/vocoder) gets tuned in later.
-            pitch_semitones = self.pitch_arousal * msg.arousal
-            processed = self._apply_character(wav_path, pitch_semitones, msg)
+    def build_score(self, text, p, a, d):
+        """Text + PAD -> parallel arrays. Pure function of its inputs."""
+        syls = syllabify(text)
+        n = len(syls)
 
-            # --- Play to the configured sink ---
-            play = self.play_cmd.format(wav=processed)
-            subprocess.run(play, shell=True, check=True, capture_output=True)
+        # Whole-utterance modulation
+        pitch_center = self.base_hz * (2.0 ** (a * self.arousal_octaves))
+        dur = self.base_dur * (1.0 - self.arousal_speed * a)
+        gap = self.base_gap * (1.0 - self.dominance_tighten * d)
+        gain = clamp(self.base_gain + self.dominance_gain * d, 0.1, 1.0)
 
-            self.get_logger().info(
-                f'Spoke: "{msg.text}" '
-                f"[ls={length_scale:.2f}, pitch={pitch_semitones:+.1f}st, "
-                f"PAD=({msg.pleasure:+.2f},{msg.arousal:+.2f},{msg.dominance:+.2f})]"
-            )
-        finally:
-            for p in {wav_path, locals().get("processed", wav_path)}:
-                try:
-                    if p and os.path.exists(p):
-                        os.remove(p)
-                except OSError:
-                    pass
+        pitch, durs, gaps = [], [], []
+        for i, syl in enumerate(syls):
+            # Letter-keyed step: deterministic per syllable.
+            lead = next((c for c in syl.lower() if c.isalpha()), "x")
+            step = self.pitch_steps[ord(lead) % len(self.pitch_steps)]
+            hz = pitch_center * (2.0 ** (step / 12.0))
 
-    def _apply_character(self, wav_path, pitch_semitones, msg):
-        """Apply pitch shift + synthesizer character.
+            # Pleasure contour: drift across the line, up for pleasant.
+            frac = i / max(1, n - 1)
+            hz *= 1.0 + p * self.pleasure_drift * frac
 
-        FIRST VERSION: pitch shift only, via sox if available; otherwise pass through.
-        This is the tuning hook for the 'cat with a synthesizer voice' character -
-        formant shift, ring mod, vocoder, etc. get layered here over time.
-        Returns the path to the processed WAV (or the original if no processing).
-        """
-        # If no pitch change requested and no character chain yet, pass through.
-        if abs(pitch_semitones) < 0.01:
-            return wav_path
+            terminal = syl.rstrip().endswith((".", "!", "?"))
+            pitch.append(float(hz))
+            durs.append(float(dur * (self.terminal_stretch if terminal else 1.0)))
+            gaps.append(0.0 if i == n - 1 else float(gap))
 
-        out_path = wav_path.replace(".wav", "_proc.wav")
-        try:
-            # sox pitch shift in cents (semitones * 100). Requires sox installed.
-            subprocess.run(
-                ["sox", wav_path, out_path, "pitch", str(int(pitch_semitones * 100))],
-                check=True,
-                capture_output=True,
-            )
-            return out_path
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # sox missing or failed - pass through unprocessed rather than fail.
-            self.get_logger().warn("sox unavailable; skipping pitch/character processing")
-            return wav_path
+        return syls, pitch, durs, gaps, float(gain)
+
+    def pick_timbre(self, msg: Utterance) -> str:
+        """Timbre selection hook. Static for now; mode and sulk state plug in
+        here once they exist. Names must match the TIMBRES table in speech.js."""
+        return "default"
 
 
 def main():
