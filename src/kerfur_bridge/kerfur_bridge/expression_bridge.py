@@ -6,18 +6,19 @@ import rclpy
 from rclpy.node import Node
 import websockets
 
-from kerfur_msgs.msg import Expression, GazeTarget
+from kerfur_msgs.msg import Expression, GazeTarget, Speech
 
 
 class ExpressionBridge(Node):
     """Bridges ROS2 face topics to the FastAPI hub WebSocket.
 
-    Forwards two message types to the browser over ONE hub connection:
+    Forwards three message types to the browser over ONE hub connection:
       /kerfur/expression -> {type: "setExpression", ...}
       /kerfur/gaze       -> {type: "lookAt", x, y}
+      /kerfur/speech     -> {type: "say", ...score...}
     The browser multiplexes by msg.type (see face.js handleCommand), so a single
-    socket carrying both is exactly what the face expects. One connection avoids
-    two nodes competing over the hub socket.
+    socket carrying all of them is exactly what the face expects. One connection
+    avoids nodes competing over the hub socket - this node is the sole writer.
     """
 
     def __init__(self):
@@ -40,6 +41,12 @@ class ExpressionBridge(Node):
             self.on_gaze,
             10
         )
+        self.speech_sub = self.create_subscription(
+            Speech,
+            '/kerfur/speech',
+            self.on_speech,
+            10
+        )
 
         # Async loop for WebSocket - runs in its own thread
         self.loop = asyncio.new_event_loop()
@@ -48,7 +55,8 @@ class ExpressionBridge(Node):
         self.ws_thread.start()
 
         self.get_logger().info(
-            f'ExpressionBridge started (expression + gaze), connecting to {self.hub_url}'
+            f'ExpressionBridge started (expression + gaze + speech), '
+            f'connecting to {self.hub_url}'
         )
 
     def _run_async_loop(self):
@@ -111,17 +119,27 @@ class ExpressionBridge(Node):
         self._send(payload)
 
     def on_speech(self, msg: Speech):
+        """Called when a ROS2 Speech score arrives. Forward as a flat copy.
+
+        Field names in Speech.msg match the JSON keys speech.js expects, so
+        this is a copy, not a translation. ROS array fields arrive as
+        array.array, which json.dumps rejects - hence the explicit list()s.
+        """
+        self.get_logger().info(
+            f'Speech: "{msg.text}" ({len(msg.syllables)} syl, timbre={msg.timbre})'
+        )
         payload = {
-            "type": "say",
-            "text": msg.text,
-            "syllables": list(msg.syllables),
-            "pitch_hz": [float(x) for x in msg.pitch_hz],
-            "duration_sec": [float(x) for x in msg.duration_sec],
-            "gap_sec": [float(x) for x in msg.gap_sec],
-            "gain": float(msg.gain),
-            "timbre": msg.timbre,
+            'type': 'say',
+            'text': msg.text,
+            'syllables': list(msg.syllables),
+            'pitch_hz': [float(x) for x in msg.pitch_hz],
+            'duration_sec': [float(x) for x in msg.duration_sec],
+            'gap_sec': [float(x) for x in msg.gap_sec],
+            'gain': float(msg.gain),
+            'timbre': msg.timbre,
         }
-        self._send(payload)
+        if not self._send(payload):
+            self.get_logger().warn('Hub not connected, dropping speech')
 
 
 def main():
