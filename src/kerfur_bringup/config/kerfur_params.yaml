@@ -35,7 +35,6 @@ expression_bridge:
   ros__parameters:
     hub_url: "ws://localhost:8000/ws"
 
-
 # --- append to / replace in kerfur_bringup/config/kerfur_params.yaml ---
 # Replaces the earlier 'perception_head' section - the in-process Hailo node was
 # superseded by the two-process detector(socket)+bridge split.
@@ -64,8 +63,6 @@ attention_selector:
     wander_move_sec: 2.5           # seconds to ease between wander points (bigger = lazier)
     wander_pause_sec: 1.5          # seconds to dwell at each wander point
 
-
-
 # --- future: drives subsystem ---
 # drives:
 #   ros__parameters:
@@ -90,6 +87,9 @@ context_server:
   ros__parameters:
     pad_stale_sec: 2.0
     log_full_prompt: true
+    memory_db_path: "/home/roo/.kerfur/memory.db"
+    core_max_tokens: 500
+    core_reload_sec: 30.0
 
 consciousness:
   ros__parameters:
@@ -97,7 +97,6 @@ consciousness:
     llm_model: "kerfur-consciousness"
     llm_timeout_sec: 30.0
     context_timeout_sec: 2.0
-
 
 voice:
   ros__parameters:
