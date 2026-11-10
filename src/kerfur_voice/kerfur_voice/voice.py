@@ -10,6 +10,8 @@ split as expressions. Every coefficient is a parameter so the voice is
 tuned from kerfur_params.yaml, not from code.
 """
 
+import re
+
 import rclpy
 from rclpy.node import Node
 
@@ -46,6 +48,10 @@ def syllabify(text: str):
             in_vowel = is_v
         if cur:
             chunks.append(cur)
+        # Silent trailing e/es/ed ("here", "ones", "liked") is not its own blip.
+        if len(chunks) > 1 and re.fullmatch(r"e[sd]?", re.sub(r"[^a-z]", "", chunks[-1].lower())):
+            tail = chunks.pop()
+            chunks[-1] += tail
         chunks[-1] += " "
         out.extend(chunks)
     if out:
@@ -60,7 +66,9 @@ class VoiceNode(Node):
         # --- Base voice ---
         self.declare_parameter("base_hz", 440.0)        # pitch center at arousal=0
         self.declare_parameter("base_dur_sec", 0.09)    # blip length at arousal=0
-        self.declare_parameter("base_gap_sec", 0.04)    # silence between blips
+        self.declare_parameter("base_gap_sec", 0.005)   # silence between syllables within a word
+        self.declare_parameter("word_gap_sec", 0.045)   # silence between words
+        self.declare_parameter("phrase_gap_mult", 2.5)  # word gap multiplier after , . ! ?
         self.declare_parameter("base_gain", 0.6)        # loudness at dominance=0
 
         # --- PAD coupling ---
@@ -81,6 +89,8 @@ class VoiceNode(Node):
         self.base_hz = self.get_parameter("base_hz").value
         self.base_dur = self.get_parameter("base_dur_sec").value
         self.base_gap = self.get_parameter("base_gap_sec").value
+        self.word_gap = self.get_parameter("word_gap_sec").value
+        self.phrase_gap_mult = self.get_parameter("phrase_gap_mult").value
         self.base_gain = self.get_parameter("base_gain").value
         self.arousal_octaves = self.get_parameter("arousal_octaves").value
         self.arousal_speed = self.get_parameter("arousal_speed").value
@@ -129,7 +139,7 @@ class VoiceNode(Node):
         # Whole-utterance modulation
         pitch_center = self.base_hz * (2.0 ** (a * self.arousal_octaves))
         dur = self.base_dur * (1.0 - self.arousal_speed * a)
-        gap = self.base_gap * (1.0 - self.dominance_tighten * d)
+        tighten = 1.0 - self.dominance_tighten * d
         gain = clamp(self.base_gain + self.dominance_gain * d, 0.1, 1.0)
 
         pitch, durs, gaps = [], [], []
@@ -143,10 +153,22 @@ class VoiceNode(Node):
             frac = i / max(1, n - 1)
             hz *= 1.0 + p * self.pleasure_drift * frac
 
-            terminal = syl.rstrip().endswith((".", "!", "?"))
+            bare = syl.rstrip()
+            terminal = bare.endswith((".", "!", "?"))
             pitch.append(float(hz))
             durs.append(float(dur * (self.terminal_stretch if terminal else 1.0)))
-            gaps.append(0.0 if i == n - 1 else float(gap))
+
+            # Gap after this blip: none at the end, long after punctuation,
+            # medium between words, tiny between syllables of one word.
+            if i == n - 1:
+                gap = 0.0
+            elif bare.endswith((",", ".", "!", "?")):
+                gap = self.word_gap * self.phrase_gap_mult
+            elif syl.endswith(" "):
+                gap = self.word_gap
+            else:
+                gap = self.base_gap
+            gaps.append(float(gap * tighten))
 
         return syls, pitch, durs, gaps, float(gain)
 
