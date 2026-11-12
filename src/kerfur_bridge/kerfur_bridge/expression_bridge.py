@@ -6,7 +6,7 @@ import rclpy
 from rclpy.node import Node
 import websockets
 
-from kerfur_msgs.msg import Expression, GazeTarget, Speech
+from kerfur_msgs.msg import Expression, GazeTarget, Speech, ConsciousnessTrigger
 
 
 class ExpressionBridge(Node):
@@ -27,7 +27,7 @@ class ExpressionBridge(Node):
         # Parameters - configurable at launch time
         self.declare_parameter('hub_url', 'ws://localhost:8000/ws')
         self.hub_url = self.get_parameter('hub_url').value
-
+        self.wake_pub = self.create_publisher(ConsciousnessTrigger, '/kerfur/wake', 10)
         # ROS2 subscriptions
         self.expr_sub = self.create_subscription(
             Expression,
@@ -72,8 +72,8 @@ class ExpressionBridge(Node):
                     self.ws = ws
                     self.get_logger().info('Connected to hub')
                     async for message in ws:
-                        # We don't currently use inbound messages but consume them
-                        pass
+                        self._on_hub_message(message)                   
+              
             except Exception as e:
                 self.get_logger().warn(f'Hub connection failed: {e}, retrying in 2s')
                 self.ws = None
@@ -118,6 +118,7 @@ class ExpressionBridge(Node):
         # a dropped frame is invisible, and warning on every one would spam.
         self._send(payload)
 
+
     def on_speech(self, msg: Speech):
         """Called when a ROS2 Speech score arrives. Forward as a flat copy.
 
@@ -140,6 +141,29 @@ class ExpressionBridge(Node):
         }
         if not self._send(payload):
             self.get_logger().warn('Hub not connected, dropping speech')
+            
+
+    def _on_hub_message(self, raw):
+        """Inbound hub traffic. Only 'address' (typed text from /talk) is
+        acted on; anything else on the socket is ignored."""
+        try:
+            msg = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(msg, dict) or msg.get('type') != 'address':
+            return
+        text = str(msg.get('text', '')).strip()
+        if not text:
+            return
+
+    trig = ConsciousnessTrigger()
+    trig.trigger_type = 'address'
+    trig.content = text[:500]   # cap what a text box can push into the prompt
+    trig.source = 'user'
+    self.wake_pub.publish(trig)
+    self.get_logger().info(f'Address from hub: "{trig.content}"')
+    
+
 
 
 def main():
