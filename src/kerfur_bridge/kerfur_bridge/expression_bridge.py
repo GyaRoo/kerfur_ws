@@ -156,12 +156,12 @@ class ExpressionBridge(Node):
         if not text:
             return
 
-    trig = ConsciousnessTrigger()
-    trig.trigger_type = 'address'
-    trig.content = text[:500]   # cap what a text box can push into the prompt
-    trig.source = 'user'
-    self.wake_pub.publish(trig)
-    self.get_logger().info(f'Address from hub: "{trig.content}"')
+        trig = ConsciousnessTrigger()
+        trig.trigger_type = 'address'
+        trig.content = text[:500]   # cap what a text box can push into the prompt
+        trig.source = 'user'
+        self.wake_pub.publish(trig)
+        self.get_logger().info(f'Address from hub: "{trig.content}"')
     
 
 
