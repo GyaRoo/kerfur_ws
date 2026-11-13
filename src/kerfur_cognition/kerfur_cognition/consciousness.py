@@ -8,6 +8,7 @@ the context server or the gateway is unreachable, Kerfur stays an animal.
 
 import os
 import json
+import threading
 import urllib.request
 import urllib.error
 
@@ -19,6 +20,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from kerfur_msgs.msg import ConsciousnessTrigger, Utterance, PADNudge, PADState
 from kerfur_msgs.srv import AssembleContext
 
+
+KEY_NAME = "LITELLM_MASTER_KEY"
 
 # Output contract. Appended to the volatile half of the prompt so the model
 # knows the response shape. Kept here rather than in voice.md because it's
@@ -48,17 +51,22 @@ class ConsciousnessNode(Node):
         self.declare_parameter("llm_model", "kerfur-consciousness")
         self.declare_parameter("llm_timeout_sec", 30.0)
         self.declare_parameter("context_timeout_sec", 2.0)
+        # Path to the secrets file, never the key itself: parameters are
+        # readable by anything on the graph via `ros2 param get`.
+        self.declare_parameter("secrets_file", "~/.kerfur/secrets.env")
 
         self.llm_url = self.get_parameter("llm_url").value
         self.llm_model = self.get_parameter("llm_model").value
         self.llm_timeout = self.get_parameter("llm_timeout_sec").value
         self.context_timeout = self.get_parameter("context_timeout_sec").value
 
-        # Gateway key from the environment, same pattern as before.
-        self.api_key = os.environ.get("LITELLM_MASTER_KEY")
+        # Gateway key. Environment wins if present; otherwise the node reads
+        # the secrets file itself, so no launch path can forget the export.
+        self.api_key = self._load_key()
         if not self.api_key:
             self.get_logger().warn(
-                "No LITELLM_MASTER_KEY - gateway calls will be rejected."
+                f"No {KEY_NAME} in environment or secrets file - "
+                "will retry on first wake."
             )
 
         # Current mood, kept for the Utterance snapshot. The prompt's copy
@@ -96,6 +104,34 @@ class ConsciousnessNode(Node):
         self.current_pad = (msg.pleasure, msg.arousal, msg.dominance)
 
     # ------------------------------------------------------------------
+    # Key
+    # ------------------------------------------------------------------
+
+    def _load_key(self):
+        """Gateway key: environment first, then the secrets file.
+
+        Accepts both `KEY=value` and `export KEY=value` lines, with or
+        without quotes. Returns None if neither source has it.
+        """
+        key = os.environ.get(KEY_NAME)
+        if key:
+            return key
+
+        path = os.path.expanduser(self.get_parameter("secrets_file").value)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export "):
+                        line = line[len("export "):].lstrip()
+                    if line.startswith(KEY_NAME + "="):
+                        value = line.split("=", 1)[1].strip().strip("'\"")
+                        return value or None
+        except OSError as e:
+            self.get_logger().warn(f"Secrets file unreadable: {e}")
+        return None
+
+    # ------------------------------------------------------------------
     # Context
     # ------------------------------------------------------------------
 
@@ -111,15 +147,21 @@ class ConsciousnessNode(Node):
         req.trigger_text = f"What woke you: [{trigger_type}] {content}"
         req.agent_result = ""
 
-        # Synchronous call is safe here because we're in a reentrant group
-        # on a multithreaded executor - the response callback can run while
-        # this thread waits.
+        # Wait on an Event rather than spinning. This callback already runs
+        # on the MultiThreadedExecutor; the client is in a reentrant group,
+        # so another executor thread delivers the response and fires the
+        # done-callback while this thread blocks. Spinning the node again
+        # from here would put it on a second executor.
+        done = threading.Event()
         future = self.context_client.call_async(req)
-        rclpy.spin_until_future_complete(
-            self, future, timeout_sec=self.context_timeout
-        )
-        if not future.done() or future.result() is None:
+        future.add_done_callback(lambda _: done.set())
+
+        if not done.wait(timeout=self.context_timeout):
+            self.context_client.remove_pending_request(future)
             self.get_logger().warn("Context assembly timed out.")
+            return None
+        if future.result() is None:
+            self.get_logger().warn("Context assembly returned nothing.")
             return None
         return future.result()
 
@@ -130,6 +172,13 @@ class ConsciousnessNode(Node):
     def _call_gateway(self, system_text: str, user_text: str) -> dict:
         """OpenAI-compatible chat completion via LiteLLM. Raises on any
         transport or parse failure; the caller handles fail-soft."""
+        # Late retry: a key added to the secrets file after startup is
+        # picked up on the next wake without restarting the node.
+        if not self.api_key:
+            self.api_key = self._load_key()
+        if not self.api_key:
+            raise RuntimeError(f"no {KEY_NAME} available")
+
         payload = {
             "model": self.llm_model,
             "max_tokens": 300,
