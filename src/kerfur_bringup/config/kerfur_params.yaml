@@ -97,6 +97,7 @@ consciousness:
     llm_model: "kerfur-consciousness"
     llm_timeout_sec: 30.0
     context_timeout_sec: 2.0
+    secrets_file: "~/.kerfur/secrets.env"
 
 voice:
   ros__parameters:
