@@ -101,16 +101,19 @@ consciousness:
 
 voice:
   ros__parameters:
+    timbre: "animalese"
+    shorten_words: false
     base_hz: 440.0
-    base_dur_sec: 0.09
-    base_gap_sec: 0.04
+    base_dur_sec: 0.075
+    base_gap_sec: 0.0
+    word_gap_sec: 0.075
     base_gain: 0.6
     arousal_octaves: 0.5
     arousal_speed: 0.4
     pleasure_drift: 0.08
     dominance_gain: 0.25
     dominance_tighten: 0.5
-    pitch_steps: [0, 2, 4, 7, 9, 12]
-
+    pitch_steps: [0]
+    terminal_stretch: 1.3
 
 
