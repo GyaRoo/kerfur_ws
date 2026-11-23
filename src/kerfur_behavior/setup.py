@@ -27,6 +27,7 @@ setup(
         'pad_to_face = kerfur_behavior.pad_to_face:main',
         'emotion_engine = kerfur_behavior.emotion_engine:main',
         'attention_selector = kerfur_behavior.attention_selector:main',
+        'neck_tracker = kerfur_behavior.neck_tracker:main',
         ],
     },
 )

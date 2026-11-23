@@ -60,6 +60,14 @@ def generate_launch_description():
         ),
         Node(
             package="kerfur_behavior",
+            executable="neck_tracker",
+            name="neck_tracker",          # must match YAML section + node self-name
+            output="screen",
+            parameters=[config],
+            emulate_tty=True,
+        ),
+        Node(
+            package="kerfur_behavior",
             executable="emotion_engine",
             name="emotion_engine",
             output="screen",

@@ -63,6 +63,23 @@ attention_selector:
     wander_move_sec: 2.5           # seconds to ease between wander points (bigger = lazier)
     wander_pause_sec: 1.5          # seconds to dwell at each wander point
 
+neck_tracker:
+  ros__parameters:
+    publish_rate_hz: 25.0          # pose command rate onto /kerfur/neck_pose
+    camera_moves_with_head: true  # true if the tracking camera rides on the head
+                                   #   (detection is then an error to null, not a bearing)
+    yaw_range_deg: 30.0            # detection x = +/-1 -> +/- this many degrees
+    pitch_range_deg: 12.0
+    yaw_sign: -1.0                 # flip if she turns away from you
+    pitch_sign: -1.0               # flip if she nods the wrong way
+    dead_zone: 0.05                # ignore detection jitter below this
+    smooth: 0.12                   # low-pass per tick; lower = lazier head
+    follow_gain: 1.5               # camera_moves_with_head only; higher = snappier
+    stale_sec: 1.0                 # no detection this long -> ease to neutral
+    min_delta_deg: 0.15            # only publish when the pose moved this much
+    speed_mult: 0.6                # neck speed multiplier (unhurried)
+    accel_mult: 0.5
+
 # --- future: drives subsystem ---
 # drives:
 #   ros__parameters:
