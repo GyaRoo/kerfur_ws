@@ -73,6 +73,8 @@ neck_tracker:
     yaw_sign: -1.0                 # flip if she turns away from you
     pitch_sign: -1.0               # flip if she nods the wrong way
     dead_zone: 0.05                # ignore detection jitter below this
+    aim_y: 0.3                     # hold the box centre this far below image centre
+                                   #   (0 = centre the box; raise to look higher on a person)
     smooth: 0.12                   # low-pass per tick; lower = lazier head
     follow_gain: 1.5               # camera_moves_with_head only; higher = snappier
     stale_sec: 1.0                 # no detection this long -> ease to neutral

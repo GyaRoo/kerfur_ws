@@ -57,6 +57,11 @@ class NeckTracker(Node):
         self.declare_parameter("pitch_sign", -1.0)
         # Ignore detection jitter below this (detection units, 0..1).
         self.declare_parameter("dead_zone", 0.05)
+        # Where in the image the detection centre should sit vertically
+        # (detection units, + = below centre). 0 centres the box; a positive
+        # value holds the box centre low in the frame, i.e. aims at the top of
+        # a person box instead of its middle.
+        self.declare_parameter("aim_y", 0.0)
         # Low-pass factor per tick; lower = lazier head.
         self.declare_parameter("smooth", 0.12)
         # camera_moves_with_head only: fraction of the remaining error closed
@@ -78,6 +83,7 @@ class NeckTracker(Node):
         self.yaw_sign = g("yaw_sign")
         self.pitch_sign = g("pitch_sign")
         self.dead_zone = g("dead_zone")
+        self.aim_y = g("aim_y")
         self.smooth = g("smooth")
         self.follow_gain = g("follow_gain")
         self.stale_sec = g("stale_sec")
@@ -112,7 +118,7 @@ class NeckTracker(Node):
             self.err_x = self.err_y = 0.0
             return                              # nothing salient: hold target
         x = clamp(msg.x, -1.0, 1.0)
-        y = clamp(msg.y, -1.0, 1.0)
+        y = clamp(clamp(msg.y, -1.0, 1.0) - self.aim_y, -1.0, 1.0)
         if self.on_head:
             # Error signal; integrated in tick().
             self.err_x = x if abs(x) > self.dead_zone else 0.0
